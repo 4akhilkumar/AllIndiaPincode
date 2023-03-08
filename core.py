@@ -2,12 +2,20 @@
 This python script is used to load the data from the csv file, some data cleaning
 and return the data in the form of API
 """
+import configparser
+
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 
-LOAD_DATA = None
+
 VERSION = 1
 API_ENDPOINT = f"/api/v{VERSION}/"
+
+# CONFIG FILE
+config = configparser.ConfigParser()
+config.read('config.ini')
+CSV_FILE = config["file_data"]["csv_file"]
+
 
 class LoadData:
     """
@@ -122,26 +130,19 @@ class LoadData:
         }
         self.format_csv_data(format_rule)
 
+# On startup event,
+# Load the data from the csv file, Change the datatype of the column,
+# Apply Regex on Column, Format the data
+load_data = LoadData(CSV_FILE)
+load_data.setup_things()
+
 
 app = FastAPI()
-
-@app.on_event("startup")
-async def startup_event():
-    """
-    On startup event,
-    Load the data from the csv file, Change the datatype of the column,
-    Apply Regex on Column, Format the data
-    """
-    global LOAD_DATA
-    LOAD_DATA = LoadData("Pincode_30052019.csv")
-    LOAD_DATA.setup_things()
-
 
 @app.get(f"{API_ENDPOINT}")
 async def pincode_api(pincode: int | None):
     """
     API to get the data by pincode
     """
-    response = LOAD_DATA.filter_by_pincode(pincode)
+    response = load_data.filter_by_pincode(pincode)
     return response
-
