@@ -3,9 +3,13 @@ This python script is used to load the data from the csv file, some data cleanin
 and return the data in the form of API
 """
 import configparser
+from typing import Optional, Union
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+
+from validation import validate_pincode
 
 
 VERSION = 1
@@ -84,7 +88,7 @@ class LoadData:
             self.dataframe[column] = self.dataframe[column].apply(string_methods[method])
         print("Data Formatted")
 
-    def filter_by_pincode(self, pincode: int) -> pd.DataFrame:
+    def filter_by_pincode(self, pincode: int) -> list:
         """
         Filter the dataframe by pincode
 
@@ -92,14 +96,14 @@ class LoadData:
             pincode (int): Pincode to filter the dataframe
 
         Returns:
-            pd.DataFrame: Filtered dataframe
+            list: List of the filtered dataframe
         """
         tmp_dataframe = self.dataframe.copy()
         tmp_dataframe = tmp_dataframe[tmp_dataframe["Pincode"] == pincode]
         if tmp_dataframe.empty:
             invalid_msg = f"Pincode {pincode} not found"
             raise HTTPException(status_code=404, detail=invalid_msg)
-        return tmp_dataframe.to_dict(orient="records")
+        return JSONResponse(status_code=200, content=tmp_dataframe.to_dict(orient="records"))
 
     def setup_things(self):
         """
@@ -130,19 +134,60 @@ class LoadData:
         }
         self.format_csv_data(format_rule)
 
+
 # On startup event,
 # Load the data from the csv file, Change the datatype of the column,
 # Apply Regex on Column, Format the data
-load_data = LoadData(CSV_FILE)
-load_data.setup_things()
+class MySingleton:
+    """
+    Singleton class - Load the data from the csv file only once
+    and return the instance
+    """
+    instance = None
 
+    def __new__(cls):
+        """
+        Create the instance of the class if not created
+
+        Returns:
+            cls: Instance of the class
+        """
+        if cls.instance is None:
+            cls.instance = LoadData(CSV_FILE)
+            cls.instance.setup_things()
+        return cls.instance
+
+    def filter_by_pincode(self, pincode: int):
+        """
+        Filter the dataframe by pincode
+
+        Args:
+            pincode (int): Pincode to filter the dataframe
+        """
+        return self.instance.filter_by_pincode(pincode)
+
+
+load_data = MySingleton()
 
 app = FastAPI()
 
 @app.get(f"{API_ENDPOINT}")
-async def pincode_api(pincode: int | None):
+async def pincode_api(pincode: Optional[Union[str, int]] = None):
     """
     API to get the data by pincode
+
+    Args:
+        pincode (Optional) (str, int): Pincode to filter the dataframe. Defaults to None.
     """
-    response = load_data.filter_by_pincode(pincode)
+    if pincode is None:
+        raise HTTPException(status_code=400, detail="Pincode parameter is required.")
+
+    if pincode is None or (isinstance(pincode, str) and pincode == ""):
+        raise HTTPException(status_code=400, detail="Pincode should not be empty.")
+
+    is_pincode_valid = validate_pincode(pincode)
+    if is_pincode_valid['status'] is False:
+        raise HTTPException(status_code=400, detail=is_pincode_valid['content'])
+
+    response = load_data.filter_by_pincode(int(pincode))
     return response
