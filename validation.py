@@ -31,6 +31,3 @@ def validate_pincode(pincode: int) -> dict:
     except ValueError:
         response['content'] = "Invalid pincode."
         return response
-
-
-
