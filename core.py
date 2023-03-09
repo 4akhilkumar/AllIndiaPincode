@@ -176,6 +176,9 @@ async def pincode_api(pincode: Optional[Union[str, int]] = None):
     """
     API to get the data by pincode
 
+    API endpoint URL:
+        Localhost: http://localhost:<PORT>/api/v1/?pincode=<PINCODE>
+
     Args:
         pincode (Optional) (str, int): Pincode to filter the dataframe. Defaults to None.
     """
