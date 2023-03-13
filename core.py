@@ -1,15 +1,18 @@
 """
-This python script is used to load the data from the csv file, some data cleaning
-and return the data in the form of API
+This python script is used to load the data from the csv file,
+setup the things and return the data
 """
+import ast
 import configparser
+import logging
+from logging.handlers import RotatingFileHandler
 from typing import Optional, Union
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
-from validation import validate_pincode
+from validations import validate_pincode
 
 
 VERSION = 1
@@ -19,11 +22,39 @@ API_ENDPOINT = f"/api/v{VERSION}/"
 config = configparser.ConfigParser()
 config.read('config.ini')
 CSV_FILE = config["file_data"]["csv_file"]
+ENCODING = config["file_data"]["encoding"]
+LOG_FILE = config["logging"]["log_file"]
+MAX_BYTES = int(config["logging"]["max_bytes"])
+LOG_LEVEL = config["logging"]["log_level"]
+BACKUP_COUNT = int(config["logging"]["backup_count"])
+REQUIRED_FIELDS_STR = config["setup_things"]["required_columns"]
+REQUIRED_FIELDS = ast.literal_eval(REQUIRED_FIELDS_STR)
+DATATYPE_RULE_STR = config["setup_things"]["datatype_rule"]
+DATATYPE_RULE = ast.literal_eval(DATATYPE_RULE_STR)
+REGEX_RULE_STR = config["setup_things"]["regex_rule"]
+REGEX_RULE = ast.literal_eval(REGEX_RULE_STR)
+FORMAT_RULE_STR = config["setup_things"]["format_rule"]
+FORMAT_RULE = ast.literal_eval(FORMAT_RULE_STR)
+
+# Logging Section
+# configure the log format
+LOG_META_ATTRS = '%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d \
+- %(message)s'
+FORMATTER = logging.Formatter(LOG_META_ATTRS, datefmt="%d-%b-%y %H:%M:%S")
+
+logger = logging.getLogger(__name__)
+logger.setLevel(LOG_LEVEL)
+
+# ROTATING FILE HANDLER
+rotating_handler = RotatingFileHandler(filename=LOG_FILE,
+                                        maxBytes=MAX_BYTES, backupCount=BACKUP_COUNT)
+rotating_handler.setFormatter(FORMATTER)
+logger.addHandler(rotating_handler)
 
 
 class LoadData:
     """
-    Load the data from the csv file
+    Load the data from the csv file, Setup the things and return the data
     """
     def __init__(self, csv_data: str):
         """
@@ -42,23 +73,28 @@ class LoadData:
         Returns:
             pd.DataFrame: Dataframe of the csv file
         """
-        self.dataframe = pd.read_csv(self.csv_data, usecols=cols,
-                                    encoding='iso-8859-1', low_memory=False)
-        print("CSV File Loaded")
+        try:
+            self.dataframe = pd.read_csv(self.csv_data, usecols=cols,
+                                    encoding=ENCODING, low_memory=False)
+        except Exception as error:
+            logger.error("Error %s occured while reading the csv file", error)
+            raise HTTPException(status_code=500, detail="Internal Server Error") from error
+        logger.info("%s File Loaded", self.csv_data)
 
     def change_datatype(self, datatype_rule: dict = None):
         """
         Change the datatype of the column in the dataframe
         """
-        datatype_class = {
-            "string": str,
-            "int": int,
-            "float": float,
-            "bool": bool
-        }
-        for column, datatype in datatype_rule.items():
-            self.dataframe[column] = self.dataframe[column].astype(datatype_class[datatype])
-        print("Datatype Changed")
+        if not datatype_rule is None:
+            datatype_class = {
+                "string": str,
+                "int": int,
+                "float": float,
+                "bool": bool
+            }
+            for column, datatype in datatype_rule.items():
+                self.dataframe[column] = self.dataframe[column].astype(datatype_class[datatype])
+                logger.info("Datatype of %s changed to %s", column, datatype)
 
     def regex_on_column(self, regex_rule: dict = None):
         """
@@ -67,9 +103,10 @@ class LoadData:
         Args:
             regex_rule (dict, optional): Regex rule for the dataframe. Defaults to None.
         """
-        for column, regex in regex_rule.items():
-            self.dataframe[column] = self.dataframe[column].str.replace(regex, "", regex=True)
-        print("Regex Applied")
+        if not regex_rule is None:
+            for column, regex in regex_rule.items():
+                self.dataframe[column] = self.dataframe[column].str.replace(regex, "", regex=True)
+                logger.info("Regex %s applied on %s", regex, column)
 
     def format_csv_data(self, format_rule: dict = None):
         """
@@ -78,15 +115,16 @@ class LoadData:
         Args:
             format_rule (dict, optional): Format rule for the dataframe. Defaults to None.
         """
-        string_methods = {
-            "Title": str.title,
-            "Upper": str.upper,
-            "Lower": str.lower,
-            "Capitalize": str.capitalize
-        }
-        for column, method in format_rule.items():
-            self.dataframe[column] = self.dataframe[column].apply(string_methods[method])
-        print("Data Formatted")
+        if not format_rule is None:
+            string_methods = {
+                "Title": str.title,
+                "Upper": str.upper,
+                "Lower": str.lower,
+                "Capitalize": str.capitalize
+            }
+            for column, method in format_rule.items():
+                self.dataframe[column] = self.dataframe[column].apply(string_methods[method])
+                logger.info("Format %s applied on %s", method, column)
 
     def filter_by_pincode(self, pincode: int) -> list:
         """
@@ -102,6 +140,7 @@ class LoadData:
         tmp_dataframe = tmp_dataframe[tmp_dataframe["Pincode"] == pincode]
         if tmp_dataframe.empty:
             invalid_msg = f"Pincode {pincode} not found"
+            logger.info(invalid_msg)
             raise HTTPException(status_code=404, detail=invalid_msg)
         return JSONResponse(status_code=200, content=tmp_dataframe.to_dict(orient="records"))
 
@@ -109,30 +148,17 @@ class LoadData:
         """
         Setup the things
         """
-        self.read_csv(
-            cols = ["Office Name", "Pincode", "District", "StateName"]
-        )
+        # Read the csv file
+        self.read_csv(cols=REQUIRED_FIELDS)
 
         # Change the datatype of the column
-        datatype_rule = {
-            # "Coulmn Name": "Datatype" E.g. String, Int, Float, Bool
-            "District": "string",
-        }
-        self.change_datatype(datatype_rule)
+        self.change_datatype(datatype_rule = DATATYPE_RULE)
 
         # Apply Regex on Column
-        regex_rule = {
-            # "Coulmn Name": "Regex Pattern"
-            "Office Name": r"\s*(S\.O|B\.O| SO| BO)\b"
-        }
-        self.regex_on_column(regex_rule)
+        self.regex_on_column(regex_rule = REGEX_RULE)
 
         # Format the data
-        format_rule = {
-            # "Coulmn Name": "Format" E.g. Title, Upper, Lower, Capitalize
-            "District": "Title"
-        }
-        self.format_csv_data(format_rule)
+        self.format_csv_data(format_rule = FORMAT_RULE)
 
 
 # On startup event,
@@ -183,13 +209,16 @@ async def pincode_api(pincode: Optional[Union[str, int]] = None):
         pincode (Optional) (str, int): Pincode to filter the dataframe. Defaults to None.
     """
     if pincode is None:
+        logger.info("Pincode parameter is required.")
         raise HTTPException(status_code=400, detail="Pincode parameter is required.")
 
     if pincode is None or (isinstance(pincode, str) and pincode == ""):
+        logger.info("Pincode should not be empty.")
         raise HTTPException(status_code=400, detail="Pincode should not be empty.")
 
     is_pincode_valid = validate_pincode(pincode)
     if is_pincode_valid['status'] is False:
+        logger.info(is_pincode_valid['content'])
         raise HTTPException(status_code=400, detail=is_pincode_valid['content'])
 
     response = load_data.filter_by_pincode(int(pincode))
